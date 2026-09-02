@@ -18,7 +18,27 @@ __all__ = [
     "ComplianceStatus",
     "ConnectorFactory",
     "QuoteConnector",
+    "DeterministicTransport",
+    "HTTPResponse",
+    "HTTPTransport",
+    "TransportError",
+    "TransportHTTPError",
+    "TransportTimeoutError",
+    "RetryingTransport",
+    "TransportRetryPolicy",
     "SourceAdapter",
     "SourceCapability",
     "SourcePolicyResolver",
 ]
+
+
+from .transport import (
+    RetryingTransport,
+    TransportRetryPolicy,
+    DeterministicTransport,
+    HTTPResponse,
+    HTTPTransport,
+    TransportError,
+    TransportHTTPError,
+    TransportTimeoutError,
+)
