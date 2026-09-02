@@ -65,7 +65,6 @@ class CollectionPipeline:
         job: CollectionJob,
         connector: QuoteConnector,
     ) -> tuple[Any, CollectionExecution | None]:
-
         previous_result = self.orchestrator.get_completed(job.job_id)
 
         if previous_result is not None:
@@ -145,7 +144,6 @@ class CollectionPipeline:
             )
 
             self._executions[job.job_id] = execution
-
             return result, execution
 
         run = self.repository.get_run(run_id)
