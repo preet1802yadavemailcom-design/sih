@@ -332,3 +332,38 @@ def test_postgres_repository_get_source_capability_missing_source_propagates_key
 
     with pytest.raises(KeyError, match="source not found"):
         repository.get_source_capability("SRC-MISSING")
+
+
+def test_get_source_capability_feeds_connector_factory() -> None:
+    from packages.connectors.demo import DemoConnector
+    from packages.connectors.factory import ConnectorFactory
+
+    repository = PostgresRepository("postgresql+psycopg://unused")
+
+    repository.get_source = lambda source_id: {
+        "source_id": source_id,
+        "source_name": "Demo",
+        "source_type": "OTHER",
+        "access_method": "FILE_FEED",
+        "authorization_status": "APPROVED",
+        "tos_status": "ALLOWED",
+        "robots_status": "ALLOWED",
+        "active": True,
+        "metadata": {
+            "capabilities": [
+                "FARE_SEARCH",
+                "DOMESTIC_ROUTES",
+                "ECONOMY_FARES",
+            ]
+        },
+    }
+
+    capability = repository.get_source_capability("DEMO")
+
+    factory = ConnectorFactory()
+    factory.register("DEMO", DemoConnector)
+
+    connector = factory.create(capability)
+
+    assert connector.source_id == "DEMO"
+    assert connector.capability == capability
