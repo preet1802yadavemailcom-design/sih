@@ -35,6 +35,11 @@ class DemoConnector(QuoteConnector):
         }),
     )
 
+    def __init__(self, *, capability: SourceCapability | None = None) -> None:
+        if capability is not None:
+            self.source_id = capability.source_id
+            self.capability = capability
+
     def collect(self, request: CollectionRequest) -> list[dict[str, Any]]:
         captured = datetime.now(timezone.utc)
         return [

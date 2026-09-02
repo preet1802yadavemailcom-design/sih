@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from packages.connectors.base import CollectionRequest, QuoteConnector
+from packages.connectors.capabilities import CollectionCapability
 from packages.orchestration.models import CollectionJob
 from packages.orchestration.runner import CollectionOrchestrator
 
@@ -77,6 +78,11 @@ class CollectionPipeline:
             )
 
         connector.ensure_collection_allowed()
+        connector.ensure_capabilities(
+            CollectionCapability.FARE_SEARCH,
+            CollectionCapability.DOMESTIC_ROUTES,
+            CollectionCapability.ECONOMY_FARES,
+        )
 
         run_id = self.repository.start_run(connector.source_id)
 
