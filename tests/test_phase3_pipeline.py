@@ -1,6 +1,13 @@
 from datetime import date, datetime, timedelta, timezone
 
 from packages.connectors.demo import DemoConnector
+from packages.connectors.capabilities import (
+    SourceCapability,
+    AccessMethod,
+    AuthorizationStatus,
+    CollectionCapability,
+    ComplianceStatus,
+)
 from packages.ingestion.service import InMemoryRepository
 from packages.orchestration import (
     CollectionJob,
@@ -261,3 +268,54 @@ def test_partial_collection_is_distinguished_from_total_failure() -> None:
     assert run["metadata"]["error"] == (
         "RuntimeError: source failed after partial collection"
     )
+
+def test_pipeline_blocks_collection_before_repository_run_for_unauthorized_connector() -> None:
+    class TrackingRepository(InMemoryRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.start_run_called = False
+
+        def start_run(self, source_id: str) -> str:
+            self.start_run_called = True
+            return super().start_run(source_id)
+
+    class BlockedConnector(DemoConnector):
+        source_id = "DEMO-BLOCKED"
+
+        capability = SourceCapability(
+            source_id=source_id,
+            access_method=AccessMethod.FILE_FEED,
+            authorization_status=AuthorizationStatus.PENDING,
+            tos_status=ComplianceStatus.ALLOWED,
+            robots_status=ComplianceStatus.ALLOWED,
+            capabilities=frozenset({
+                CollectionCapability.FARE_SEARCH,
+                CollectionCapability.DOMESTIC_ROUTES,
+                CollectionCapability.ECONOMY_FARES,
+            }),
+        )
+
+    repository = TrackingRepository()
+    pipeline = CollectionPipeline(
+        repository=repository,
+        orchestrator=CollectionOrchestrator(),
+    )
+
+    job = CollectionJob.create(
+        job_id="e2e-compliance-block",
+        source_code="DEMO-BLOCKED",
+        origin="DEL",
+        destination="BOM",
+        departure_date=date(2026, 10, 1),
+        advance_days=7,
+    )
+
+    try:
+        pipeline.run(job, BlockedConnector())
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("Unauthorized connector was not blocked")
+
+    assert repository.start_run_called is False
+    assert repository.runs == {}

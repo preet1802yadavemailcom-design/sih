@@ -76,6 +76,8 @@ class CollectionPipeline:
                 f"does not match job source '{job.source_code}'"
             )
 
+        connector.ensure_collection_allowed()
+
         run_id = self.repository.start_run(connector.source_id)
 
         request = CollectionRequest(
