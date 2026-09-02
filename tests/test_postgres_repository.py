@@ -3,6 +3,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from packages.connectors.capabilities import (
+    AccessMethod,
+    AuthorizationStatus,
+    CollectionCapability,
+    ComplianceStatus,
+)
 from packages.contracts.models import QuoteIn
 from packages.ingestion.postgres import PostgresRepository
 
@@ -164,3 +170,165 @@ def test_postgres_repository_ingest_requires_registered_route():
 
     with pytest.raises(ValueError, match="route not registered: DEL-BOM"):
         repository.ingest("run-123", make_quote())
+
+
+def test_postgres_repository_get_source_returns_mapping():
+    engine = MagicMock()
+    connection = MagicMock()
+
+    mapping = {
+        "source_id": "SRC-01",
+        "source_name": "IndiGo (6E)",
+        "source_type": "AIRLINE",
+        "access_method": "OFFICIAL_API",
+        "authorization_status": "APPROVED",
+        "tos_status": "ALLOWED",
+        "robots_status": "UNKNOWN",
+        "active": True,
+        "metadata": {
+            "capabilities": [
+                "FARE_SEARCH",
+                "DOMESTIC_ROUTES",
+                "ECONOMY_FARES",
+            ]
+        },
+    }
+
+    connection.execute.return_value.mappings.return_value.first.return_value = mapping
+    engine.begin.return_value.__enter__.return_value = connection
+
+    with patch(
+        "packages.ingestion.postgres.create_engine",
+        return_value=engine,
+    ):
+        repository = PostgresRepository(
+            "postgresql+psycopg://test:test@localhost/test"
+        )
+
+    result = repository.get_source("SRC-01")
+
+    assert result == mapping
+    connection.execute.assert_called_once()
+
+
+def test_postgres_repository_get_source_missing_raises_key_error():
+    engine = MagicMock()
+    connection = MagicMock()
+
+    connection.execute.return_value.mappings.return_value.first.return_value = None
+    engine.begin.return_value.__enter__.return_value = connection
+
+    with patch(
+        "packages.ingestion.postgres.create_engine",
+        return_value=engine,
+    ):
+        repository = PostgresRepository(
+            "postgresql+psycopg://test:test@localhost/test"
+        )
+
+    with pytest.raises(KeyError, match="source not found"):
+        repository.get_source("SRC-MISSING")
+
+
+def test_postgres_repository_get_source_capability_resolves_policy():
+    engine = MagicMock()
+    connection = MagicMock()
+
+    mapping = {
+        "source_id": "SRC-01",
+        "source_name": "IndiGo (6E)",
+        "source_type": "AIRLINE",
+        "access_method": "OFFICIAL_API",
+        "authorization_status": "APPROVED",
+        "tos_status": "ALLOWED",
+        "robots_status": "UNKNOWN",
+        "active": True,
+        "metadata": {
+            "capabilities": [
+                "FARE_SEARCH",
+                "DOMESTIC_ROUTES",
+                "ECONOMY_FARES",
+            ]
+        },
+    }
+
+    connection.execute.return_value.mappings.return_value.first.return_value = mapping
+    engine.begin.return_value.__enter__.return_value = connection
+
+    with patch(
+        "packages.ingestion.postgres.create_engine",
+        return_value=engine,
+    ):
+        repository = PostgresRepository(
+            "postgresql+psycopg://test:test@localhost/test"
+        )
+
+    capability = repository.get_source_capability("SRC-01")
+
+    assert capability.source_id == "SRC-01"
+    assert capability.access_method == AccessMethod.OFFICIAL_API
+    assert capability.authorization_status == AuthorizationStatus.APPROVED
+    assert capability.tos_status == ComplianceStatus.ALLOWED
+    assert capability.collection_allowed is True
+    assert capability.supports(CollectionCapability.FARE_SEARCH) is True
+    assert capability.supports(CollectionCapability.DOMESTIC_ROUTES) is True
+    assert capability.supports(CollectionCapability.ECONOMY_FARES) is True
+
+
+def test_postgres_repository_get_source_capability_preserves_fail_closed_policy():
+    engine = MagicMock()
+    connection = MagicMock()
+
+    mapping = {
+        "source_id": "SRC-02",
+        "source_name": "Air India (AI)",
+        "source_type": "AIRLINE",
+        "access_method": "PARTNER_API",
+        "authorization_status": "PENDING",
+        "tos_status": "ALLOWED",
+        "robots_status": "UNKNOWN",
+        "active": True,
+        "metadata": {
+            "capabilities": [
+                "FARE_SEARCH",
+                "DOMESTIC_ROUTES",
+                "ECONOMY_FARES",
+            ]
+        },
+    }
+
+    connection.execute.return_value.mappings.return_value.first.return_value = mapping
+    engine.begin.return_value.__enter__.return_value = connection
+
+    with patch(
+        "packages.ingestion.postgres.create_engine",
+        return_value=engine,
+    ):
+        repository = PostgresRepository(
+            "postgresql+psycopg://test:test@localhost/test"
+        )
+
+    capability = repository.get_source_capability("SRC-02")
+
+    assert capability.collection_allowed is False
+    assert capability.supports(CollectionCapability.FARE_SEARCH) is False
+
+
+
+def test_postgres_repository_get_source_capability_missing_source_propagates_key_error():
+    engine = MagicMock()
+    connection = MagicMock()
+
+    connection.execute.return_value.mappings.return_value.first.return_value = None
+    engine.begin.return_value.__enter__.return_value = connection
+
+    with patch(
+        "packages.ingestion.postgres.create_engine",
+        return_value=engine,
+    ):
+        repository = PostgresRepository(
+            "postgresql+psycopg://test:test@localhost/test"
+        )
+
+    with pytest.raises(KeyError, match="source not found"):
+        repository.get_source_capability("SRC-MISSING")

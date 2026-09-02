@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from packages.connectors.base import CollectionRequest, QuoteConnector
-from packages.connectors.capabilities import CollectionCapability
+from packages.connectors.capabilities import CollectionCapability, SourceCapability
 from packages.orchestration.models import CollectionJob
 from packages.orchestration.runner import CollectionOrchestrator
 
@@ -41,6 +41,9 @@ class CollectionRepository(Protocol):
         ...
 
     def get_run(self, run_id: str) -> dict[str, Any]:
+        ...
+
+    def get_source_capability(self, source_id: str) -> SourceCapability:
         ...
 
 
