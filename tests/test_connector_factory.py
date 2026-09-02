@@ -112,3 +112,28 @@ def test_factory_rejects_non_connector_builder_result() -> None:
 
     with pytest.raises(TypeError, match="must return QuoteConnector"):
         factory.create(capability)
+
+
+def test_factory_creates_source_adapter() -> None:
+    from packages.connectors.adapter import SourceAdapter
+
+    class FactoryAdapter(SourceAdapter):
+        def __init__(self, capability):
+            self.source_id = capability.source_id
+            self.capability = capability
+
+        def fetch(self, request):
+            return []
+
+        def map_quote(self, payload):
+            raise NotImplementedError
+
+    capability = make_capability("DEMO")
+    factory = ConnectorFactory()
+    factory.register("DEMO", FactoryAdapter)
+
+    connector = factory.create(capability)
+
+    assert isinstance(connector, SourceAdapter)
+    assert connector.source_id == "DEMO"
+    assert connector.capability == capability

@@ -1,3 +1,4 @@
+from .adapter import SourceAdapter
 from .base import CollectionRequest, QuoteConnector
 from .capabilities import (
     AccessMethod,
@@ -17,6 +18,7 @@ __all__ = [
     "ComplianceStatus",
     "ConnectorFactory",
     "QuoteConnector",
+    "SourceAdapter",
     "SourceCapability",
     "SourcePolicyResolver",
 ]
