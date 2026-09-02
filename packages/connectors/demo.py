@@ -4,6 +4,13 @@ from decimal import Decimal
 from typing import Any
 
 from .base import CollectionRequest, QuoteConnector
+from .capabilities import (
+    AccessMethod,
+    AuthorizationStatus,
+    CollectionCapability,
+    ComplianceStatus,
+    SourceCapability,
+)
 
 
 class DemoConnector(QuoteConnector):
@@ -14,6 +21,19 @@ class DemoConnector(QuoteConnector):
     """
 
     source_id = "DEMO"
+
+    capability = SourceCapability(
+        source_id=source_id,
+        access_method=AccessMethod.FILE_FEED,
+        authorization_status=AuthorizationStatus.APPROVED,
+        tos_status=ComplianceStatus.ALLOWED,
+        robots_status=ComplianceStatus.ALLOWED,
+        capabilities=frozenset({
+            CollectionCapability.FARE_SEARCH,
+            CollectionCapability.DOMESTIC_ROUTES,
+            CollectionCapability.ECONOMY_FARES,
+        }),
+    )
 
     def collect(self, request: CollectionRequest) -> list[dict[str, Any]]:
         captured = datetime.now(timezone.utc)

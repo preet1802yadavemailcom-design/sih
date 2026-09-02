@@ -136,13 +136,72 @@ class PostgresRepository:
             )
             return str(observation.observation_id)
 
-    def finish_run(self, run_id: str, status: str = "SUCCEEDED") -> None:
+    def finish_run(
+        self,
+        run_id: str,
+        status: str = "SUCCEEDED",
+        *,
+        error_code: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        allowed_statuses = {
+            "SUCCEEDED",
+            "PARTIAL",
+            "FAILED",
+        }
+
+        if status not in allowed_statuses:
+            raise ValueError(
+                f"invalid collection run status: {status}"
+            )
+
         with self.engine.begin() as conn:
             conn.execute(
                 text("""
                     UPDATE collection_runs
-                    SET completed_at = :completed_at, status = :status
+                    SET completed_at = :completed_at,
+                        status = :status,
+                        error_code = :error_code,
+                        metadata = COALESCE(metadata, '{}'::jsonb)
+                                   || CAST(:metadata AS jsonb)
                     WHERE run_id = :run_id
                 """),
-                {"completed_at": datetime.now(timezone.utc), "status": status, "run_id": run_id},
+                {
+                    "completed_at": datetime.now(timezone.utc),
+                    "status": status,
+                    "error_code": error_code,
+                    "metadata": __import__("json").dumps(
+                        metadata or {},
+                        sort_keys=True,
+                        default=str,
+                    ),
+                    "run_id": run_id,
+                },
             )
+
+    def get_run(self, run_id: str) -> dict[str, Any]:
+        """Return the persisted collection-run state."""
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT
+                        run_id,
+                        source_id,
+                        started_at,
+                        completed_at,
+                        status,
+                        records_seen,
+                        records_accepted,
+                        records_rejected,
+                        error_code,
+                        metadata
+                    FROM collection_runs
+                    WHERE run_id = :run_id
+                """),
+                {"run_id": run_id},
+            ).mappings().first()
+
+            if row is None:
+                raise KeyError(f"collection run not found: {run_id}")
+
+            return dict(row)

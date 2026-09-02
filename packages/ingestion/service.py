@@ -35,7 +35,8 @@ class InMemoryRepository:
         }
         return run_id
 
-    def ingest(self, run_id: str, raw_payload: dict[str, Any], quote: QuoteIn) -> dict[str, Any]:
+    def ingest(self, run_id: str, quote: QuoteIn) -> dict[str, Any]:
+        raw_payload = quote.raw_payload
         run = self.runs[run_id]
         run["records_seen"] += 1
         raw_id = str(uuid4())
@@ -73,7 +74,43 @@ class InMemoryRepository:
             run["records_rejected"] += 1
         return observation
 
-    def finish_run(self, run_id: str, status: str = "SUCCEEDED") -> dict[str, Any]:
-        self.runs[run_id]["completed_at"] = datetime.now(timezone.utc)
-        self.runs[run_id]["status"] = status
-        return self.runs[run_id]
+    def finish_run(
+        self,
+        run_id: str,
+        status: str = "SUCCEEDED",
+        *,
+        error_code: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        allowed_statuses = {
+            "SUCCEEDED",
+            "PARTIAL",
+            "FAILED",
+        }
+
+        if status not in allowed_statuses:
+            raise ValueError(
+                f"invalid collection run status: {status}"
+            )
+
+        run = self.runs[run_id]
+        run["completed_at"] = datetime.now(timezone.utc)
+        run["status"] = status
+        run["error_code"] = error_code
+
+        if metadata:
+            run["metadata"] = {
+                **run.get("metadata", {}),
+                **metadata,
+            }
+        else:
+            run.setdefault("metadata", {})
+
+        return run
+
+    def get_run(self, run_id: str) -> dict[str, Any]:
+        """Return the persisted collection-run state."""
+        try:
+            return self.runs[run_id]
+        except KeyError:
+            raise KeyError(f"collection run not found: {run_id}") from None
