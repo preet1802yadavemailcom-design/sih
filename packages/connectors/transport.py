@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import time
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 
 class TransportError(RuntimeError):
@@ -16,12 +17,75 @@ class TransportTimeoutError(TransportError):
 class TransportHTTPError(TransportError):
     """The upstream returned an unsuccessful HTTP response."""
 
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(f"upstream returned HTTP {status_code}")
+
 
 @dataclass(frozen=True)
 class HTTPResponse:
     status_code: int
     payload: Any
     headers: dict[str, str]
+
+
+RETRYABLE_HTTP_STATUS_CODES = frozenset({
+    408,
+    429,
+    500,
+    502,
+    503,
+    504,
+})
+
+
+def classify_response(response: HTTPResponse) -> HTTPResponse:
+    if response.status_code < 200 or response.status_code >= 300:
+        raise TransportHTTPError(response.status_code)
+    return response
+
+
+def is_retryable_http_error(exc: TransportHTTPError) -> bool:
+    return exc.status_code in RETRYABLE_HTTP_STATUS_CODES
+
+
+def validate_http_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("url must be an absolute HTTP(S) URL")
+    return url
+
+
+def build_auth_headers(api_key: str | None) -> dict[str, str]:
+    if not api_key:
+        return {}
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+def _header_value(
+    headers: dict[str, str],
+    name: str,
+) -> str | None:
+    for key, value in headers.items():
+        if key.lower() == name.lower():
+            return value
+    return None
+
+
+def _retry_after_seconds(response: HTTPResponse) -> float | None:
+    value = _header_value(response.headers, "Retry-After")
+    if value is None:
+        return None
+
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+
+    if seconds < 0:
+        return None
+
+    return seconds
 
 
 class HTTPTransport(Protocol):
@@ -50,37 +114,8 @@ class TransportRetryPolicy:
             raise ValueError("backoff_seconds must not be negative")
 
 
-RETRYABLE_HTTP_STATUS_CODES = frozenset({
-    408,
-    429,
-    500,
-    502,
-    503,
-    504,
-})
-
-
-def classify_response(response: HTTPResponse) -> HTTPResponse:
-    if response.status_code < 200 or response.status_code >= 300:
-        raise TransportHTTPError(
-            f"upstream returned HTTP {response.status_code}"
-        )
-    return response
-
-
-def is_retryable_http_error(exc: TransportHTTPError) -> bool:
-    message = str(exc)
-    return any(
-        f"HTTP {status}" in message
-        for status in RETRYABLE_HTTP_STATUS_CODES
-    )
-
-
 class RetryingTransport:
-    """Retry wrapper for transient transport failures.
-
-    The wrapped transport remains responsible for the actual HTTP request.
-    """
+    """Retry wrapper for transient transport failures."""
 
     def __init__(
         self,
@@ -116,23 +151,47 @@ class RetryingTransport:
                     timeout_seconds=timeout_seconds,
                 )
                 return classify_response(response)
-            except TransportError as exc:
+
+            except TransportHTTPError as exc:
                 last_error = exc
 
-                if (
-                    isinstance(exc, TransportHTTPError)
-                    and not is_retryable_http_error(exc)
-                ):
+                if not is_retryable_http_error(exc):
                     raise
+
+                if attempt < self.retry_policy.max_attempts:
+                    retry_after = None
+
+                    if hasattr(self.transport, "response"):
+                        response = getattr(self.transport, "response")
+                        if isinstance(response, HTTPResponse):
+                            retry_after = _retry_after_seconds(response)
+
+                    delay = (
+                        retry_after
+                        if retry_after is not None
+                        else self.retry_policy.backoff_seconds
+                    )
+
+                    if delay:
+                        self._sleep(delay)
+
+                    continue
+
+                raise
+
+            except TransportError as exc:
+                last_error = exc
 
                 if attempt < self.retry_policy.max_attempts:
                     if self.retry_policy.backoff_seconds:
                         self._sleep(self.retry_policy.backoff_seconds)
                     continue
 
-                raise last_error
+                raise
 
-        raise RuntimeError("transport retry loop exited unexpectedly")
+        raise RuntimeError(
+            "transport retry loop exited unexpectedly"
+        ) from last_error
 
 
 class DeterministicTransport:
@@ -153,12 +212,19 @@ class DeterministicTransport:
         timeout_seconds: float = 10.0,
     ) -> HTTPResponse:
         if timeout_seconds <= 0:
-            raise ValueError("timeout_seconds must be greater than zero")
+            raise ValueError(
+                "timeout_seconds must be greater than zero"
+            )
+
+        safe_headers = dict(headers or {})
+
+        if "Authorization" in safe_headers:
+            safe_headers["Authorization"] = "[REDACTED]"
 
         self.calls.append({
             "method": method,
             "url": url,
-            "headers": dict(headers or {}),
+            "headers": safe_headers,
             "params": dict(params or {}),
             "json": json,
             "timeout_seconds": timeout_seconds,
