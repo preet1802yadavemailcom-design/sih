@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -40,4 +40,20 @@ class QuoteConnector(ABC):
         if not self.capability.collection_allowed:
             raise PermissionError(
                 f"collection not allowed for source '{self.source_id}'"
+            )
+
+    def ensure_capabilities(
+        self,
+        *required: CollectionCapability,
+    ) -> None:
+        missing = [
+            capability.value
+            for capability in required
+            if not self.supports(capability)
+        ]
+
+        if missing:
+            raise PermissionError(
+                f"source '{self.source_id}' is missing required capabilities: "
+                + ", ".join(missing)
             )

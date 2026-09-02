@@ -319,3 +319,56 @@ def test_pipeline_blocks_collection_before_repository_run_for_unauthorized_conne
 
     assert repository.start_run_called is False
     assert repository.runs == {}
+
+
+def test_pipeline_blocks_connector_missing_required_fare_capability() -> None:
+    class TrackingRepository(InMemoryRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.start_run_called = False
+
+        def start_run(self, source_id: str) -> str:
+            self.start_run_called = True
+            return super().start_run(source_id)
+
+    class LimitedConnector(DemoConnector):
+        source_id = "DEMO-LIMITED"
+
+        capability = SourceCapability(
+            source_id=source_id,
+            access_method=AccessMethod.FILE_FEED,
+            authorization_status=AuthorizationStatus.APPROVED,
+            tos_status=ComplianceStatus.ALLOWED,
+            robots_status=ComplianceStatus.ALLOWED,
+            capabilities=frozenset({
+                CollectionCapability.FARE_SEARCH,
+                CollectionCapability.DOMESTIC_ROUTES,
+            }),
+        )
+
+    repository = TrackingRepository()
+    pipeline = CollectionPipeline(
+        repository=repository,
+        orchestrator=CollectionOrchestrator(),
+    )
+
+    job = CollectionJob.create(
+        job_id="e2e-capability-block",
+        source_code="DEMO-LIMITED",
+        origin="DEL",
+        destination="BOM",
+        departure_date=date(2026, 10, 1),
+        advance_days=7,
+    )
+
+    try:
+        pipeline.run(job, LimitedConnector())
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError(
+            "Connector missing ECONOMY_FARES capability was not blocked"
+        )
+
+    assert repository.start_run_called is False
+    assert repository.runs == {}

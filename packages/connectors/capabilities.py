@@ -51,19 +51,26 @@ class SourceCapability:
 
     @property
     def collection_allowed(self) -> bool:
-        return (
-            self.active
-            and self.authorization_status == AuthorizationStatus.APPROVED
-            and self.tos_status == ComplianceStatus.ALLOWED
-            and self.robots_status == ComplianceStatus.ALLOWED
-            and self.access_method
-            in {
-                AccessMethod.OFFICIAL_API,
-                AccessMethod.PARTNER_API,
-                AccessMethod.PERMITTED_SCRAPE,
-                AccessMethod.FILE_FEED,
-            }
-        )
+        if not self.active:
+            return False
+
+        if self.authorization_status != AuthorizationStatus.APPROVED:
+            return False
+
+        if self.tos_status != ComplianceStatus.ALLOWED:
+            return False
+
+        if self.access_method in {
+            AccessMethod.OFFICIAL_API,
+            AccessMethod.PARTNER_API,
+            AccessMethod.FILE_FEED,
+        }:
+            return True
+
+        if self.access_method == AccessMethod.PERMITTED_SCRAPE:
+            return self.robots_status == ComplianceStatus.ALLOWED
+
+        return False
 
     def supports(self, capability: CollectionCapability) -> bool:
         return self.collection_allowed and capability in self.capabilities
