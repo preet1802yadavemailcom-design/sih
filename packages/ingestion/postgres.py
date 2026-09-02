@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+from packages.connectors.capabilities import SourceCapability
 from packages.contracts.models import QuoteIn
 from packages.ingestion.hash import sha256_payload
 from packages.ingestion.normalizer import normalize_quote
@@ -205,3 +206,39 @@ class PostgresRepository:
                 raise KeyError(f"collection run not found: {run_id}")
 
             return dict(row)
+
+    def get_source(self, source_id: str) -> dict[str, Any]:
+        """Return the persisted source-registry record."""
+        if not source_id.strip():
+            raise ValueError("source_id must not be empty")
+
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                text("""
+                    SELECT
+                        source_id,
+                        source_name,
+                        source_type,
+                        access_method,
+                        authorization_status,
+                        tos_status,
+                        robots_status,
+                        active,
+                        metadata
+                    FROM source_registry
+                    WHERE source_id = :source_id
+                """),
+                {"source_id": source_id},
+            ).mappings().first()
+
+            if row is None:
+                raise KeyError(f"source not found: {source_id}")
+
+            return dict(row)
+
+    def get_source_capability(self, source_id: str) -> "SourceCapability":
+        """Resolve a persisted source-registry record into collection policy."""
+        from packages.connectors.policy import SourcePolicyResolver
+
+        record = self.get_source(source_id)
+        return SourcePolicyResolver.from_record(record)
