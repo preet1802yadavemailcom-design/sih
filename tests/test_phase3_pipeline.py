@@ -134,6 +134,50 @@ def test_retry_after_connector_failure_does_not_duplicate_successful_quote() -> 
     assert connector.calls == 2
 
 
+def test_partial_collection_retry_is_idempotent() -> None:
+    repository = InMemoryRepository()
+
+    class PartialThenSuccessConnector(DemoConnector):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def collect(self, request):
+            self.calls += 1
+            successful_quote = super().collect(request)[0]
+
+            yield successful_quote
+
+            if self.calls == 1:
+                raise RuntimeError("source failed after one usable record")
+
+    connector = PartialThenSuccessConnector()
+
+    pipeline = CollectionPipeline(
+        repository=repository,
+        orchestrator=CollectionOrchestrator(
+            retry_policy=RetryPolicy(max_attempts=2)
+        ),
+    )
+
+    result, execution = pipeline.run(
+        make_job("partial-retry-idempotent-001"),
+        connector,
+    )
+
+    assert result.status == CollectionJobStatus.SUCCEEDED
+    assert result.attempts == 2
+
+    assert execution is not None
+    assert execution.records_seen == 1
+    assert execution.records_accepted == 1
+    assert execution.records_rejected == 0
+
+    assert len(repository.raw_quotes) == 1
+    assert len(repository.observations) == 1
+    assert len(repository.quality_results) == 1
+    assert connector.calls == 2
+
+
 def test_failed_collection_marks_run_failed() -> None:
     repository = InMemoryRepository()
 

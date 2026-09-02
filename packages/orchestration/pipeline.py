@@ -48,7 +48,7 @@ class CollectionRepository(Protocol):
 
 
 class CollectionPipeline:
-    """Connects Phase-3 orchestration to the Phase-2 ingestion pipeline."""
+    """Connects orchestration, authorized collection, and ingestion."""
 
     def __init__(
         self,
@@ -87,8 +87,6 @@ class CollectionPipeline:
             CollectionCapability.ECONOMY_FARES,
         )
 
-        run_id = self.repository.start_run(connector.source_id)
-
         request = CollectionRequest(
             source_id=connector.source_id,
             origin_iata=job.origin,
@@ -100,12 +98,26 @@ class CollectionPipeline:
             ),
         )
 
+        # Keep one run for the complete orchestration attempt. Repository
+        # ingestion is expected to provide its own observation/raw deduplication.
+        run_id = self.repository.start_run(connector.source_id)
+
         def collect_once(_: CollectionJob) -> None:
             payloads = connector.collect(request)
 
+            canonicalize_one = getattr(connector, "map_quote", None)
+
+            if callable(canonicalize_one):
+                for payload in payloads:
+                    quote = canonicalize_one(payload)
+                    self.repository.ingest(
+                        run_id=run_id,
+                        quote=quote,
+                    )
+                return
+
             for payload in payloads:
                 quote = connector.to_canonical(payload)
-
                 self.repository.ingest(
                     run_id=run_id,
                     quote=quote,
@@ -138,7 +150,6 @@ class CollectionPipeline:
 
         run = self.repository.get_run(run_id)
 
-        # A collection that produced usable records before failing is PARTIAL.
         status = (
             "PARTIAL"
             if run["records_seen"] > 0

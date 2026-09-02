@@ -75,6 +75,19 @@ class PostgresRepository:
                 },
             ).one()
 
+            existing_observation = conn.execute(
+                text("""
+                    SELECT observation_id
+                    FROM observations
+                    WHERE raw_quote_id = :raw_quote_id
+                    LIMIT 1
+                """),
+                {"raw_quote_id": raw.raw_quote_id},
+            ).first()
+
+            if existing_observation is not None:
+                return str(existing_observation.observation_id)
+
             observation = conn.execute(
                 text("""
                     INSERT INTO observations

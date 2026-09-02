@@ -21,6 +21,7 @@ class InMemoryRepository:
         self.raw_quotes: list[dict[str, Any]] = []
         self.observations: list[dict[str, Any]] = []
         self.quality_results: list[dict[str, Any]] = []
+        self._observation_by_raw_key: dict[tuple[str, str], dict[str, Any]] = {}
 
     def start_run(self, source_id: str) -> str:
         run_id = str(uuid4())
@@ -38,9 +39,16 @@ class InMemoryRepository:
     def ingest(self, run_id: str, quote: QuoteIn) -> dict[str, Any]:
         raw_payload = quote.raw_payload
         run = self.runs[run_id]
+        raw_hash = sha256_payload(raw_payload)
+        raw_key = (run_id, raw_hash)
+
+        existing = self._observation_by_raw_key.get(raw_key)
+        if existing is not None:
+            return existing
+
         run["records_seen"] += 1
         raw_id = str(uuid4())
-        raw_hash = sha256_payload(raw_payload)
+
         self.raw_quotes.append({
             "raw_quote_id": raw_id,
             "run_id": run_id,
@@ -52,14 +60,20 @@ class InMemoryRepository:
         decision = evaluate_quote(quote)
         normalized = normalize_quote(quote)
         observation_id = str(uuid4())
-        status_map = {"ACCEPT": "ACCEPTED", "REJECT": "REJECTED", "FLAG": "FLAGGED"}
+        status_map = {
+            "ACCEPT": "ACCEPTED",
+            "REJECT": "REJECTED",
+            "FLAG": "FLAGGED",
+        }
         quality_status = status_map[decision.decision]
+
         observation = {
             "observation_id": observation_id,
             "raw_quote_id": raw_id,
             **normalized,
             "quality_status": quality_status,
         }
+
         self.observations.append(observation)
         self.quality_results.append({
             "observation_id": observation_id,
@@ -68,10 +82,14 @@ class InMemoryRepository:
             "decision": decision.decision,
             "reason_codes": list(decision.reason_codes),
         })
+
+        self._observation_by_raw_key[raw_key] = observation
+
         if decision.decision == "ACCEPT":
             run["records_accepted"] += 1
         else:
             run["records_rejected"] += 1
+
         return observation
 
     def finish_run(
