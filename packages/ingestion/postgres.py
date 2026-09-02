@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+
+from packages.contracts.models import QuoteIn
+from packages.ingestion.hash import sha256_payload
+from packages.ingestion.normalizer import normalize_quote
+from packages.quality.rules import evaluate_quote
+
+
+class PostgresRepository:
+    """PostgreSQL persistence adapter for the Phase 1 schema.
+
+    The adapter deliberately uses SQL text against the existing schema rather
+    than introducing a second ORM schema definition. This keeps database
+    ownership in `migrations/001_initial.sql` and makes lineage explicit.
+    """
+
+    def __init__(self, database_url: str) -> None:
+        self.engine: Engine = create_engine(database_url, pool_pre_ping=True)
+
+    def start_run(self, source_id: str) -> str:
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                text("""
+                    INSERT INTO collection_runs
+                      (source_id, started_at, status)
+                    VALUES (:source_id, :started_at, 'RUNNING')
+                    RETURNING run_id
+                """),
+                {"source_id": source_id, "started_at": datetime.now(timezone.utc)},
+            ).one()
+            return str(row.run_id)
+
+    def ingest(self, run_id: str, quote: QuoteIn) -> str:
+        normalized = normalize_quote(quote)
+        quality = evaluate_quote(quote)
+        raw_hash = sha256_payload(quote.raw_payload)
+
+        with self.engine.begin() as conn:
+            route = conn.execute(
+                text("""
+                    SELECT route_id FROM routes
+                    WHERE origin_iata = :origin AND destination_iata = :destination
+                      AND active = TRUE
+                """),
+                {"origin": quote.origin_iata, "destination": quote.destination_iata},
+            ).first()
+            if route is None:
+                raise ValueError(f"route not registered: {quote.origin_iata}-{quote.destination_iata}")
+
+            raw = conn.execute(
+                text("""
+                    INSERT INTO raw_quotes
+                      (run_id, captured_at, source_record_key, payload, payload_sha256, content_type)
+                    VALUES
+                      (:run_id, :captured_at, :source_record_key, CAST(:payload AS jsonb), :sha, :content_type)
+                    ON CONFLICT (run_id, payload_sha256)
+                    DO UPDATE SET payload_sha256 = EXCLUDED.payload_sha256
+                    RETURNING raw_quote_id
+                """),
+                {
+                    "run_id": run_id,
+                    "captured_at": quote.captured_at,
+                    "source_record_key": quote.flight_number,
+                    "payload": __import__("json").dumps(quote.raw_payload, sort_keys=True, default=str),
+                    "sha": raw_hash,
+                    "content_type": "application/json",
+                },
+            ).one()
+
+            observation = conn.execute(
+                text("""
+                    INSERT INTO observations
+                      (raw_quote_id, route_id, source_id, collection_timestamp,
+                       departure_at, advance_purchase_days, advance_window, currency,
+                       base_fare_minor, mandatory_charges_minor, optional_charges_minor,
+                       total_payable_minor, fare_family, availability_status,
+                       quality_status, canonical_version)
+                    VALUES
+                      (:raw_quote_id, :route_id, :source_id, :collection_timestamp,
+                       :departure_at, :advance_purchase_days, :advance_window, :currency,
+                       :base_fare_minor, :mandatory_charges_minor, :optional_charges_minor,
+                       :total_payable_minor, :fare_family, :availability_status,
+                       :quality_status, :canonical_version)
+                    RETURNING observation_id
+                """),
+                {
+                    "raw_quote_id": raw.raw_quote_id,
+                    "route_id": route.route_id,
+                    "source_id": quote.source_id,
+                    "collection_timestamp": quote.captured_at,
+                    "departure_at": normalized["departure_at"],
+                    "advance_purchase_days": normalized["advance_purchase_days"],
+                    "advance_window": normalized["advance_window"],
+                    "currency": normalized["currency"],
+                    "base_fare_minor": normalized["base_fare_minor"],
+                    "mandatory_charges_minor": normalized["mandatory_charges_minor"],
+                    "optional_charges_minor": normalized["optional_charges_minor"],
+                    "total_payable_minor": normalized["total_payable_minor"],
+                    "fare_family": normalized["fare_family"],
+                    "availability_status": normalized["availability_status"],
+                    "quality_status": {"ACCEPT": "ACCEPTED", "REJECT": "REJECTED", "FLAG": "FLAGGED"}[quality.decision],
+                    "canonical_version": normalized["canonical_version"],
+                },
+            ).one()
+
+            conn.execute(
+                text("""
+                    UPDATE collection_runs
+                    SET records_seen = records_seen + 1,
+                        records_accepted = records_accepted + CASE WHEN :decision = 'ACCEPT' THEN 1 ELSE 0 END,
+                        records_rejected = records_rejected + CASE WHEN :decision <> 'ACCEPT' THEN 1 ELSE 0 END
+                    WHERE run_id = :run_id
+                """),
+                {"decision": quality.decision, "run_id": run_id},
+            )
+
+            conn.execute(
+                text("""
+                    INSERT INTO quality_results
+                      (observation_id, rule_version, quality_score, decision, reason_codes)
+                    VALUES (:observation_id, 'P2.0', :score, :decision, :reasons)
+                """),
+                {
+                    "observation_id": observation.observation_id,
+                    "score": quality.score,
+                    "decision": quality.decision,
+                    "reasons": list(quality.reason_codes),
+                },
+            )
+            return str(observation.observation_id)
+
+    def finish_run(self, run_id: str, status: str = "SUCCEEDED") -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    UPDATE collection_runs
+                    SET completed_at = :completed_at, status = :status
+                    WHERE run_id = :run_id
+                """),
+                {"completed_at": datetime.now(timezone.utc), "status": status, "run_id": run_id},
+            )
